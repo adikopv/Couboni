@@ -162,4 +162,4 @@ def add_payment_method(user: str, passw: str, details: str) -> Response:
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True)
