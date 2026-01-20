@@ -4,7 +4,6 @@ import requests
 import re
 import json
 import random
-from typing import Any, Dict, Optional
 from datetime import datetime
 
 app = Flask(__name__)
@@ -39,10 +38,10 @@ LAST_NAMES = [
 ]
 
 @app.route('/')
-def home() -> str:
+def home():
     return "API is running. Use /add_payment_method/<details> or /add_payment_method_with_email/<email>/<details>"
 
-def generate_random_email() -> str:
+def generate_random_email():
     """Generate a realistic random email address."""
     
     # Choose random name combination
@@ -65,7 +64,7 @@ def generate_random_email() -> str:
     username = random.choice(email_patterns)
     return f"{username}@{domain}".lower()
 
-def extract_stripe_public_key(html_content: str) -> Optional[str]:
+def extract_stripe_public_key(html_content):
     """Extract Stripe public key from HTML content."""
     
     # Pattern 1: Look for Stripe public key in script tags
@@ -120,7 +119,7 @@ def extract_stripe_public_key(html_content: str) -> Optional[str]:
     
     return None
 
-def get_stripe_public_key(session: requests.Session, headers: Dict[str, str]) -> str:
+def get_stripe_public_key(session, headers):
     """Fetch the website and extract Stripe public key."""
     
     # Try multiple URLs where Stripe key might be present
@@ -145,7 +144,7 @@ def get_stripe_public_key(session: requests.Session, headers: Dict[str, str]) ->
     
     raise ValueError("Could not extract Stripe public key from any page")
 
-def register_new_user(session: requests.Session, headers: Dict[str, str], email: str) -> bool:
+def register_new_user(session, headers, email):
     """Register a new user with only email (no username/password needed)."""
     
     # Step 1: Get the registration page to extract nonce
@@ -209,16 +208,16 @@ def register_new_user(session: requests.Session, headers: Dict[str, str], email:
         print(f"Registration error: {e}")
         return False
 
-def validate_email_format(email: str) -> bool:
+def validate_email_format(email):
     """Validate email format."""
     email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-z]{2,}$'
     return bool(re.match(email_pattern, email))
 
-def get_current_time_str() -> str:
+def get_current_time_str():
     """Get current time as formatted string."""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def calculate_time_taken(start_time_str: str, end_time_str: str) -> str:
+def calculate_time_taken(start_time_str, end_time_str):
     """Calculate time difference between start and end times."""
     try:
         start_time = datetime.strptime(start_time_str, "%Y-%m-%d %H:%M:%S")
@@ -231,7 +230,7 @@ def calculate_time_taken(start_time_str: str, end_time_str: str) -> str:
     except:
         return "N/A"
 
-def fetch_bin_info(bin_number: str) -> Dict[str, Any]:
+def fetch_bin_info(bin_number):
     """
     Fetch BIN (Bank Identification Number) information from antipublic API.
     
@@ -298,7 +297,7 @@ def fetch_bin_info(bin_number: str) -> Dict[str, Any]:
         }
 
 @app.route('/add_payment_method/<details>', methods=['GET'])
-def add_payment_method_auto_email(details: str) -> Response:
+def add_payment_method_auto_email(details):
     """Automatically generate email and add payment method with BIN lookup."""
     start_time = get_current_time_str()
     bin_lookup_time = None
@@ -349,7 +348,7 @@ def add_payment_method_auto_email(details: str) -> Response:
         return jsonify(response_data), 500
 
 @app.route('/add_payment_method_with_email/<email>/<details>', methods=['GET'])
-def add_payment_method_with_email(email: str, details: str) -> Response:
+def add_payment_method_with_email(email, details):
     """Add payment method with provided email and include BIN lookup."""
     start_time = get_current_time_str()
     bin_lookup_time = None
@@ -403,9 +402,7 @@ def add_payment_method_with_email(email: str, details: str) -> Response:
             response_data['bin_lookup_time'] = bin_lookup_time
         return jsonify(response_data), 500
 
-def _add_payment_method_with_email_and_bin(email: str, details: str, start_time: str, 
-                                          bin_info: Optional[Dict[str, Any]] = None, 
-                                          bin_lookup_time: Optional[str] = None) -> Response:
+def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=None, bin_lookup_time=None):
     """Internal function to handle adding payment method with email and BIN info."""
     try:
         # Extract card details from URL path
@@ -617,7 +614,7 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
         return jsonify(response_data), 500
 
 @app.route('/register_user', methods=['GET'])
-def register_user_auto() -> Response:
+def register_user_auto():
     """Endpoint to register a random user with email only."""
     start_time = get_current_time_str()
     try:
@@ -672,7 +669,7 @@ def register_user_auto() -> Response:
         }), 500
 
 @app.route('/register_user_with_email/<email>', methods=['GET'])
-def register_user_with_email(email: str) -> Response:
+def register_user_with_email_route(email):
     """Endpoint to register a user with specific email only."""
     start_time = get_current_time_str()
     try:
@@ -719,7 +716,7 @@ def register_user_with_email(email: str) -> Response:
         }), 500
 
 @app.route('/generate_emails/<int:count>', methods=['GET'])
-def generate_emails(count: int) -> Response:
+def generate_emails(count):
     """Generate multiple random emails."""
     start_time = get_current_time_str()
     try:
@@ -747,7 +744,7 @@ def generate_emails(count: int) -> Response:
         }), 500
 
 @app.route('/bin_lookup/<bin_number>', methods=['GET'])
-def bin_lookup(bin_number: str) -> Response:
+def bin_lookup(bin_number):
     """
     Endpoint to fetch BIN information.
     
@@ -778,7 +775,7 @@ def bin_lookup(bin_number: str) -> Response:
         }), 500
 
 @app.route('/bin_lookup_from_card/<card_details>', methods=['GET'])
-def bin_lookup_from_card(card_details: str) -> Response:
+def bin_lookup_from_card(card_details):
     """
     Extract BIN from full card details and fetch information.
     
