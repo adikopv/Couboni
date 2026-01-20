@@ -297,14 +297,13 @@ def fetch_bin_info(bin_number: str) -> Dict[str, Any]:
             "error": f"Unexpected error: {str(e)}"
         }
 
-# THIS FUNCTION MUST BE DEFINED BEFORE THE ROUTES THAT USE IT
 def _add_payment_method_with_email_and_bin(email: str, details: str, start_time: str, 
                                           bin_info: Optional[Dict[str, Any]] = None, 
-                                          bin_lookup_time: Optional[str] = None) -> Response:
+                                          bin_lookup_time: Optional[str] = None) -> Tuple[Response, int]:
     """Internal function to handle adding payment method with email and BIN info."""
     try:
         # Extract card details from URL path
-        parts = details.split('|')
+        parts: list[str] = details.split('|')
         if len(parts) != 4:
             end_time = get_current_time_str()
             response_data = {
@@ -320,10 +319,10 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
         cc, mm, yy, cvv = parts
 
         # Create a session to persist cookies across requests
-        session = requests.Session()
+        session: requests.Session = requests.Session()
 
         # Common headers
-        headers = {
+        headers: Dict[str, str] = {
             'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
@@ -368,12 +367,12 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
             return jsonify(response_data), 500
 
         # Step 3: Fetch the add payment method page (now authenticated)
-        page_url = 'https://www.dsegni.com/en/my-account/add-payment-method/'
-        page_response = session.get(page_url, headers=headers)
-        html = page_response.text
+        page_url: str = 'https://www.dsegni.com/en/my-account/add-payment-method/'
+        page_response: requests.Response = session.get(page_url, headers=headers)
+        html: str = page_response.text
 
         # Extract Stripe params (wc_stripe_params or wc_stripe_upe_params)
-        pattern = r"var\s+(wc_stripe_(?:upe_)?params)\s*=\s*(\{.*?\});"
+        pattern: str = r"var\s+(wc_stripe_(?:upe_)?params)\s*=\s*(\{.*?\});"
         match = re.search(pattern, html, re.DOTALL)
         if not match:
             end_time = get_current_time_str()
@@ -387,18 +386,18 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
                 response_data['bin_lookup_time'] = bin_lookup_time
             return jsonify(response_data), 500
         
-        params_str = match.group(2)
+        params_str: str = match.group(2)
 
         # Clean trailing commas in JSON (common in inline scripts)
         params_str = re.sub(r",\s*}", "}", params_str)
         params_str = re.sub(r",\s*]", "]", params_str)
-        wc_params = json.loads(params_str)
+        wc_params: Dict[str, Any] = json.loads(params_str)
 
         # Get the correct nonce for creating setup intent
-        ajax_nonce = wc_params.get('createAndConfirmSetupIntentNonce')
+        ajax_nonce: str | None = wc_params.get('createAndConfirmSetupIntentNonce')
         if not ajax_nonce:
             # Fallback: look for any relevant nonce
-            possible_nonces = [k for k in wc_params.keys() if 'nonce' in k.lower() and ('setup' in k.lower() or 'intent' in k.lower())]
+            possible_nonces: list[str] = [k for k in wc_params.keys() if 'nonce' in k.lower() and ('setup' in k.lower() or 'intent' in k.lower())]
             if possible_nonces:
                 ajax_nonce = wc_params.get(possible_nonces[0])
             else:
@@ -414,7 +413,7 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
                 return jsonify(response_data), 500
 
         # Step 4: Create payment method directly via Stripe API using dynamically extracted key
-        stripe_headers = {
+        stripe_headers: Dict[str, str] = {
             'accept': 'application/json',
             'content-type': 'application/x-www-form-urlencoded',
             'origin': 'https://js.stripe.com',
@@ -423,7 +422,7 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
         }
         
         # Use the dynamically extracted Stripe public key
-        stripe_data = (
+        stripe_data: str = (
             f'type=card'
             f'&card[number]={cc}'
             f'&card[cvc]={cvv}'
@@ -440,12 +439,12 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
             f'&_stripe_version=2024-06-20'
         )
         
-        pm_response = requests.post(
+        pm_response: requests.Response = requests.post(
             'https://api.stripe.com/v1/payment_methods',
             headers=stripe_headers,
             data=stripe_data
         )
-        pm_json = pm_response.json()
+        pm_json: Dict[str, Any] = pm_response.json()
         if 'error' in pm_json:
             end_time = get_current_time_str()
             response_data = {
@@ -458,10 +457,10 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
                 response_data['bin_lookup_time'] = bin_lookup_time
             return jsonify(response_data), 500
         
-        pm_id = pm_json['id']
+        pm_id: str = pm_json['id']
 
         # Step 5: Confirm setup intent via WooCommerce AJAX
-        ajax_headers = {
+        ajax_headers: Dict[str, str] = {
             'accept': '*/*',
             'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
             'origin': 'https://www.dsegni.com',
@@ -469,18 +468,18 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
             'x-requested-with': 'XMLHttpRequest',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
         }
-        ajax_data = {
+        ajax_data: Dict[str, str] = {
             'action': 'wc_stripe_create_and_confirm_setup_intent',
             'wc-stripe-payment-method': pm_id,
             'wc-stripe-payment-type': 'card',
             '_ajax_nonce': ajax_nonce,
         }
-        final_response = session.post(
+        final_response: requests.Response = session.post(
             'https://www.dsegni.com/wp-admin/admin-ajax.php',
             headers=ajax_headers,
             data=ajax_data
         )
-        final_json = final_response.json() if final_response.headers.get('content-type', '').startswith('application/json') else {'raw': final_response.text}
+        final_json: Dict[str, Any] = final_response.json() if final_response.headers.get('content-type', '').startswith('application/json') else {'raw': final_response.text}
         
         end_time = get_current_time_str()
         
@@ -509,7 +508,7 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
             'expiry': f"{mm}/{yy}"
         }
         
-        return jsonify(response_data)
+        return jsonify(response_data), 200
         
     except Exception as e:
         end_time = get_current_time_str()
@@ -523,7 +522,6 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
             response_data['bin_lookup_time'] = bin_lookup_time
         return jsonify(response_data), 500
 
-# ROUTES START HERE - CRITICAL: The function above must be defined before these routes
 @app.route('/add_payment_method/<details>', methods=['GET'])
 def add_payment_method_auto_email(details: str) -> Response:
     """Automatically generate email and add payment method with BIN lookup."""
@@ -537,7 +535,7 @@ def add_payment_method_auto_email(details: str) -> Response:
         print(f"Generated email: {email}")
         
         # Extract card details from URL path
-        parts = details.split('|')
+        parts: list[str] = details.split('|')
         if len(parts) != 4:
             end_time = get_current_time_str()
             return jsonify({
@@ -592,7 +590,7 @@ def add_payment_method_with_email(email: str, details: str) -> Response:
             }), 400
         
         # Extract card details from URL path
-        parts = details.split('|')
+        parts: list[str] = details.split('|')
         if len(parts) != 4:
             end_time = get_current_time_str()
             return jsonify({
@@ -638,10 +636,10 @@ def register_user_auto() -> Response:
         email = generate_random_email()
         
         # Create a session
-        session = requests.Session()
+        session: requests.Session = requests.Session()
         
         # Common headers
-        headers = {
+        headers: Dict[str, str] = {
             'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
@@ -698,10 +696,10 @@ def register_user_with_email(email: str) -> Response:
             }), 400
         
         # Create a session
-        session = requests.Session()
+        session: requests.Session = requests.Session()
         
         # Common headers
-        headers = {
+        headers: Dict[str, str] = {
             'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
